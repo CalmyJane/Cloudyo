@@ -1,7 +1,7 @@
 /// @file    TwinkleFox.ino
 /// @brief   Twinkling "holiday" lights that fade in and out.
 /// @example TwinkleFox.ino
-
+#include <Arduino.h>
 #include "FastLED.h"
 const int ledPins[5] = {3, 5, 9, 11};
 const int btnPins[3] = {A0, 10, A7};
@@ -19,16 +19,16 @@ CRGBArray<NUM_LEDS> leds;
 // Overall twinkle speed.
 // 0 (VERY slow) to 8 (VERY fast).  
 // 4, 5, and 6 are recommended, default is 4.
-int TWINKLE_SPEED = 4;
+int TWINKLE_SPEED = 2;
 
 // Overall twinkle density.
 // 0 (NONE lit) to 8 (ALL lit at once).  
 // Default is 5.
-int TWINKLE_DENSITY = 2;
+int TWINKLE_DENSITY = 1;
 
 // Background color for 'unlit' pixels
 // Can be set to CRGB::Black if desired.
-CRGB gBackgroundColor = CRGB::FairyLight; 
+CRGB gBackgroundColor = CRGB::Black; 
 // Example of dim incandescent fairy light background color
 // CRGB gBackgroundColor = CRGB(CRGB::FairyLight).nscale8_video(16);
 
@@ -459,6 +459,11 @@ class Button{
     int lastDebounceTime = 0;
     int debounceDelay = 100;
 
+    int longPressDelay = 1000; // Time in milliseconds to consider a press as a long press
+    unsigned long pressStartTime = 0; // Time when the button was pressed
+    bool longPressed = false; // Long pressed in this iteration?
+    bool alreadyPressed = false; // flag to detect if longPressed already happened
+
     Button(){
       
     }
@@ -506,6 +511,22 @@ class Button{
       //Detect valuechange
       pressed = !lastState && state; //was pressed in this iteration
       released = lastState && !state; //was released in this iteration
+
+      // Long press detection
+      if (state && !lastState) { // Button just pressed
+        pressStartTime = millis();
+        longPressed = false; // Reset longPressed flag when button is pressed
+        alreadyPressed = false;
+      } else if (state && lastState) { // Button still pressed
+        if (!alreadyPressed && !longPressed && millis() - pressStartTime >= longPressDelay) {
+          longPressed = true;
+          alreadyPressed = true;
+        } else if (longPressed) {
+          longPressed = false;
+        }
+      } else { // Button still released
+        longPressed = false;
+      }
     }
 };
 
@@ -536,15 +557,243 @@ class Poti{
 
 };
 
+class Strobo{
+  private:
+    void toggle(){
+      state = !state;
+      fill_solid(FastLED.leds(), NUM_LEDS, (state?color:CRGB::Black).nscale8_video(brightness));
+    }
+  public:
+    int rate = 500;
+    int lastMlls = millis();
+    int state = false;
+    int speed = 0; //set this to >0 to ignore the rate-property and use speed which counts calls of update(). Use this to keep animation synced to midi
+    int speedCounter = 0;
+    int brightness = 255;
+    CRGB color = CRGB::White;
+
+    Strobo(){}
+
+    void update(){
+      if(speed > 0){
+        speedCounter++;
+        if(speedCounter >= speed){
+          toggle();
+          speedCounter = 0;
+        }
+      } else {
+        int mlls = millis();
+        if(mlls - lastMlls >= rate){
+          toggle();
+          lastMlls = mlls;
+        }        
+      }
+    }
+    
+    void setColor(int value){
+      //set color with value 0..1023 going through a hue rainbow
+      color = mapValueToRainbowColor(value);
+    }
+
+    CRGB mapValueToRainbowColor(int value) {
+      // Map the input value to the hue range (0-255) in the CHSV color space
+      uint8_t hue = map(value, 0, 1023, 0, 255);
+      CHSV hsvColor = CHSV(hue, 255, 255); // Full saturation and value for a bright rainbow color
+      return hsvColor;
+    }
+};
+
+class Worm {
+  public:
+    int speed = 1;
+    int position = 0;
+    CRGB color = CRGB::Aqua;
+    unsigned long lastUpdateTime = 0;
+
+    Worm() {}
+
+    void update(CRGB* leds) {
+      unsigned long currentTime = millis();
+      unsigned long elapsedTime = currentTime - lastUpdateTime;
+
+      if (elapsedTime >= abs(speed)) {
+        leds[position] = CRGB::Black; // Turn off the last pixel
+        move();
+        lastUpdateTime = currentTime;
+      }
+      leds[position] = color; // Turn on the new pixel
+
+    }
+
+    void move() {
+      if (speed < 0) {
+        // Move backward
+        position = ((position - 1 + NUM_LEDS) % NUM_LEDS);
+      } else {
+        // Move forward
+        position = ((position + 1) % NUM_LEDS);
+      }
+    }
+
+    void setSpeed(int newSpeed) {
+      if (newSpeed >= -127 && newSpeed <= 128) {
+        int invertedSpeed = 128 - abs(newSpeed);
+        speed = map(invertedSpeed, 0, 128, 1, 200); // Map the inverted speed to the desired range
+        if (newSpeed < 0) {
+          speed = -speed;
+        }
+      }
+    }
+
+    void setColor(int value){
+      //set color with value 0..1023 going through a hue rainbow
+      color = mapValueToRainbowColor(value);
+    }
+
+    CRGB mapValueToRainbowColor(int value) {
+      // Map the input value to the hue range (0-255) in the CHSV color space
+      uint8_t hue = map(value, 0, 1023, 0, 255);
+      CHSV hsvColor = CHSV(hue, 255, 255); // Full saturation and value for a bright rainbow color
+      return hsvColor;
+    }
+};
+class Flash {
+  private:
+    uint32_t bulkinessTimestamp;
+    uint32_t flashTimestamp;
+    int flashStart;
+    int flashEnd;
+    bool active;
+    int bulkCount;
+    int nextFlashTime;
+    bool bulkTriggered;
+    int bulkSize;
+    int currentFlashDuration;
+
+    int randomize(int value) {
+      return value * (100 - storm) / 100 + random(value * storm / 100);
+    }
+
+    CRGB randomizeBrightness(CRGB color) {
+      uint8_t brght = random(constrain(brightness - 50, 0, 255), brightness); // Random brightness between 90% and 100%
+      return color.nscale8_video(brght);
+    }
+
+    void triggerFlash(CRGB* leds) {
+      bulkinessTimestamp = millis();
+      active = true;
+      bulkCount++;
+
+      // Spawn a new flash
+      flashStart = random(num_leds - length);
+      flashEnd = flashStart + randomize(length);
+
+      if(brightness >= 20){
+        // Light up the LEDs in the flash area with randomized brightness
+        for (int i = flashStart; i <= flashEnd; i++) {
+          leds[i] = randomizeBrightness(CRGB::White);
+        }        
+      }
+
+
+      // Calculate the next flash time and duration
+      nextFlashTime = randomize(bulkFrequency);
+      currentFlashDuration = randomize(speed);
+      flashTimestamp = millis();
+    }
+
+  public:
+    int bulkFrequency = 200;
+    int speed = 15;
+    int num_leds = 300;
+    int length = 50;
+    int storm = 10;
+    int bulkyness = 5;
+    uint8_t brightness = 255;
+
+    Flash() : active(false), bulkCount(0), bulkTriggered(false) {
+      bulkinessTimestamp = millis();
+      flashTimestamp = millis();
+      nextFlashTime = randomize(bulkFrequency);
+    }
+
+    void triggerBulk() {
+      bulkTriggered = true;
+      bulkCount = 0;
+      bulkSize = randomize(bulkyness);
+    }
+
+    void update(CRGB* leds) {
+      uint32_t currentTime = millis();
+
+      // If there is an active flash and its duration is over, remove it
+      if (active && currentTime - flashTimestamp >= currentFlashDuration) {
+        // for (int i = flashStart; i <= flashEnd; i++) {
+        //   leds[i] = CRGB::Black;
+        // }
+        active = false;
+      }
+
+      // If a bulk is triggered and enough time has passed, create a new flash in bulk
+      if (bulkTriggered && bulkCount < bulkSize && currentTime - bulkinessTimestamp >= nextFlashTime) {
+        triggerFlash(leds);
+      } else if (bulkCount >= bulkSize) {
+        // If the bulk is complete, reset the bulkTriggered flag
+        bulkTriggered = false;
+      }
+    }
+};
+
+class BeatFlasher{
+  public:
+    CRGB highlightColor = CRGB::Red;
+    bool highlighted = true;
+    int brightness = 255;
+    BeatFlasher(){
+    }
+
+    void update(CRGB* leds){
+      fill_solid(leds, NUM_LEDS, (highlighted?highlightColor:CRGB::Black).nscale8_video(brightness));
+    }
+
+    void setBeat(CRGB* leds, int beat){
+      highlighted = ((beat + 4)%4) == 0;
+    }
+
+    void setColor(int value){
+      //set color with value 0..1023 going through a hue rainbow
+      highlightColor = mapValueToRainbowColor(value);
+    }
+
+    CRGB mapValueToRainbowColor(int value) {
+      // Map the input value to the hue range (0-255) in the CHSV color space
+      uint8_t hue = map(value, 0, 1023, 0, 255);
+      CHSV hsvColor = CHSV(hue, 255, 255); // Full saturation and value for a bright rainbow color
+      return hsvColor;
+    }
+
+    void setOn(){
+      highlighted = true;
+    }
+};
+
 #define LED_COUNT 4
 Button leftBtn;
 Button middBtn;
 Button rghtBtn;
+Button middLongBtn;
 Poti leftPti;
 Poti rghtPti;
 Led boardLeds[LED_COUNT];
 MidiReader midi;
 BeatCounter counter;
+int mode = 0; //currently playing animation mode
+int modeCount = 4; //number of modes
+Strobo strobo;
+Worm worm;
+Flash flash;
+BeatFlasher beatFlash;
+uint32_t lastUpdate = millis();
 
 void onConnect(bool connected){
 
@@ -561,9 +810,7 @@ void onMidi(MidiMessageTypes type, int channel, int byte1, int byte2){
     break;
     case TimingClock:
       counter.Increment();
-      // pacifica_loop();
-      // FastLED.show();
-      updateTwinkles();
+      updateAnimations(); //update animations synced to midi
     break;
   }
   // Serial.print((String)midi.bpm + "\n");
@@ -579,24 +826,49 @@ void onMidi(MidiMessageTypes type, int channel, int byte1, int byte2){
 }
 
 void onBeat(int16_t beats){
-  // TWINKLE_DENSITY = (beats != 0) * 3;
-  boardLeds[1].blink(200, 50, 1);
-  boardLeds[2].blink(200, 50, 1);
+  switch(mode){
+    case 0:
+      flash.triggerBulk();
+    break;
+    case 1:
+      if(midi.running){
+        beatFlash.setBeat(leds, beats);
+      } else {
+        beatFlash.setOn();
+      }
+    break;
+    case 2:
+    break;
+    case 3:
+    break;
+  }
+  boardLeds[1].blink(200, 100, 1);
+  boardLeds[2].blink(200, 100, 1);
   if(beats == 0){
-    boardLeds[0].blink(200, 50, 1);
-    boardLeds[3].blink(200, 50, 1);
+    boardLeds[0].blink(200, 100, 1);
+    boardLeds[3].blink(200, 100, 1);
   }
 }
 
 //SETUP
-void setup() {
-  initTwinkles();
+void setup() {  
+  delay( 3000 ); //safety startup delay
   Serial.begin(31250);
-  delay( 1000 ); //safety startup delay
+  //init random seed with noise on analog pin
+  randomSeed(analogRead(A3));
+  //init strobo
+  strobo = Strobo();
+  //init flashes
+  flash.bulkFrequency = 150;
+  flash.storm = 95;
+  flash.bulkyness = 6;
+  //init twinkles
+  initTwinkles();
   //Init Buttons and Potis
   leftBtn = Button(btnPins[0]);
   middBtn = Button(btnPins[1]);
   rghtBtn = Button(btnPins[2]);
+  middLongBtn = Button(btnPins[1]);
   leftPti = Poti(ptiPins[0]);
   leftPti.inverted = true;
   rghtPti = Poti(ptiPins[1]);
@@ -604,7 +876,7 @@ void setup() {
   for(int i=0; i<LED_COUNT; i++){
     boardLeds[i] = Led(ledPins[i]);
     boardLeds[i].setState(false);
-    boardLeds[i].blink(200, 30, 5);
+    // boardLeds[i].blink(200, 30, 5);
   }
   midi = MidiReader(onMidi, onConnect);
   counter = BeatCounter(4, onBeat);
@@ -616,29 +888,111 @@ void loop()
   //Update buttons and potis
   leftBtn.update();
   middBtn.update();
+  middLongBtn.update();
   rghtBtn.update();
   leftPti.update();
   rghtPti.update();
+
   //update LEDs
   for(int i=0; i<LED_COUNT; i++){
     boardLeds[i].update();
   }
+
+  //handle button presses
   if(leftBtn.pressed){
     TWINKLE_DENSITY = ((TWINKLE_DENSITY + 1 + 9) % 9);
   }
   if(middBtn.pressed){
-    //change color palette
-    chooseNextColorPalette( gTargetPalette ); 
+    flash.triggerBulk();
   }
   if(rghtBtn.pressed){
     TWINKLE_SPEED = ((TWINKLE_SPEED + 1 + 9) % 9);
   }
-  gBackgroundColor = CRGB(CRGB::FairyLight).nscale8_video(rghtPti.value/64 + 1);
-  FastLED.setBrightness(leftPti.value/4);
+  if(middLongBtn.longPressed){
+    //Middle button pressed long, change mode
+    mode = ((mode + 1 + modeCount) % modeCount);
+    for(int i=0; i<4; i++){
+      boardLeds[i].blink(400, 40, mode);
+    }
+  }
+
   midi.update();
   if(!midi.connected){
-    updateTwinkles();
+    switch(mode){
+      case 0:
+        uint32_t interval = map(leftPti.value, 0, 1023, 3500, 100);
+        uint32_t currentTime = millis();
+        if (currentTime - lastUpdate >= interval) {
+          flash.triggerBulk();
+          lastUpdate = currentTime;
+        }
+      break;
+      case 1:
+        beatFlash.setOn();
+      break;
+      case 2:
+      break;
+      case 3:
+      break;
+    }
+
+    //update animations on full speed if midi is disconnected
+    updateAnimations();
   }
+  //display pixels to led strip
+  FastLED.show();
+}
+
+void updateAnimations(){
+    switch(mode){
+      case 0:
+        //set background brightness from poti
+        // gBackgroundColor = CRGB(CRGB::FairyLight).nscale8_video(rghtPti.value/16 + 1);
+        flash.brightness = constrain(leftPti.value/2, 0, 255);
+        updateTwinkles();
+        flash.update(leds);
+      break;
+      case 1:
+        pacifica_loop();
+        beatFlash.brightness = rghtPti.value/4;
+        beatFlash.setColor(leftPti.value);
+        beatFlash.update(leds);
+      break;
+      case 2:
+        strobo.rate = map(leftPti.value, 0, 1023, 10, 1000);
+        strobo.setColor(rghtPti.value);
+        strobo.update();
+      break;
+      case 3:
+        //WORM Animation
+        worm.setSpeed(map(leftPti.value, 0, 1023, -127, 128));
+        worm.setColor(rghtPti.value);
+        if(middBtn.pressed){
+          updateTwinkles(); //on button press, spawn some twinkles for the worm to eat, then choose new colors
+          chooseNextColorPalette(gTargetPalette);
+        }
+        worm.update(leds);
+      break;
+    }
+}
+
+void initTwinkles(){
+  FastLED.setMaxPowerInVoltsAndMilliamps( VOLTS, MAX_MA);
+  FastLED.addLeds<LED_TYPE,DATA_PIN,COLOR_ORDER>(leds, NUM_LEDS)
+    .setCorrection(TypicalLEDStrip);
+
+  chooseNextColorPalette(gTargetPalette);
+}
+
+void updateTwinkles(){  
+  EVERY_N_MILLISECONDS( 10 ) {
+    nblendPaletteTowardPalette( gCurrentPalette, gTargetPalette, 12);
+  }
+  if(rghtPti.moved){
+    setColorPaletteByIndex(gTargetPalette, map(rghtPti.value, 0, 1023, 0, 10));
+  }
+  drawTwinkles( leds);
+  // FastLED.show();
 }
 
 //TWINKLES CODE FROM HERE ON
@@ -702,22 +1056,6 @@ void loop()
 //  smoothly at over 50 updates per seond.
 //
 //  -Mark Kriegsman, December 2015
-
-void initTwinkles(){
-  FastLED.setMaxPowerInVoltsAndMilliamps( VOLTS, MAX_MA);
-  FastLED.addLeds<LED_TYPE,DATA_PIN,COLOR_ORDER>(leds, NUM_LEDS)
-    .setCorrection(TypicalLEDStrip);
-
-  chooseNextColorPalette(gTargetPalette);
-}
-
-void updateTwinkles(){  
-  EVERY_N_MILLISECONDS( 10 ) {
-    nblendPaletteTowardPalette( gCurrentPalette, gTargetPalette, 12);
-  }
-  drawTwinkles( leds);
-  FastLED.show();
-}
 
 //  This function loops over each pixel, calculates the 
 //  adjusted 'clock' that this pixel should use, and calls 
@@ -936,6 +1274,7 @@ const TProgmemRGBPalette16 Ice_p FL_PROGMEM =
 // Add or remove palette names from this list to control which color
 // palettes are used, and in what order.
 const TProgmemRGBPalette16* ActivePaletteList[] = {
+  &Snow_p,
   &BlueWhite_p,
   &RetroC9_p,
   &RainbowColors_p,
@@ -943,11 +1282,19 @@ const TProgmemRGBPalette16* ActivePaletteList[] = {
   &RedGreenWhite_p,
   &PartyColors_p,
   &RedWhite_p,
-  &Snow_p,
   &Holly_p,
   &Ice_p  
 };
 
+void setColorPaletteByIndex(CRGBPalette16& pal, uint8_t index) {
+  const uint8_t numberOfPalettes = sizeof(ActivePaletteList) / sizeof(ActivePaletteList[0]);
+
+  // Ensure the index is within the valid range of available palettes
+  index = index % numberOfPalettes;
+
+  // Set the color palette by index
+  pal = *(ActivePaletteList[index]);
+}
 
 // Advance to the next color palette in the list (above).
 void chooseNextColorPalette( CRGBPalette16& pal)
