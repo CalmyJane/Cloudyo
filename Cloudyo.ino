@@ -897,7 +897,7 @@ void loop()
   for(int i=0; i<LED_COUNT; i++){
     boardLeds[i].update();
   }
-
+  
   //handle button presses
   if(leftBtn.pressed){
     TWINKLE_DENSITY = ((TWINKLE_DENSITY + 1 + 9) % 9);
