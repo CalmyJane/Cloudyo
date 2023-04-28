@@ -1,7 +1,7 @@
 # Cloudyo
 A NeoPixel LED Controller made for cloud lamps
 
-<iframe width="560" height="315" src="https://www.youtube.com/embed/KcvzgH4iyIU" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+
 
 This code reads midi on Rx pin of the Arduino, reads 2 Potentiometers (right, left), 3 buttons (right, middle, left) and controls 4 LEDs.
 When press&hold middle button you switch through 4 animation modes:
