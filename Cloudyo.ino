@@ -2,17 +2,71 @@
 /// @brief   Twinkling "holiday" lights that fade in and out.
 /// @example TwinkleFox.ino
 #include <Arduino.h>
+#include <Wire.h>
 #include "FastLED.h"
-const int ledPins[5] = {3, 5, 9, 11};
-const int btnPins[3] = {A0, 10, A7};
-const int ptiPins[2] = {A5, A6};
 #define NUM_LEDS      300
 #define LED_TYPE   WS2811
-#define COLOR_ORDER   GRB
-#define DATA_PIN        2
-//#define CLK_PIN       4
-#define VOLTS          12
-#define MAX_MA       4000
+#define DATA_PIN        10
+
+class InputDevice {
+  //reads data through I2C. Since Serial communication is not possible while using FastLED, this is used to recieve data
+  //from a different arduino that gets the data through serial from bluetooth module, dmx module or maybe something else
+protected:
+  int* channels;
+  int channelCount;
+  uint8_t buffer[5];  // Buffer to store incoming bytes
+  int bufferIndex = 0;  // Current position in the buffer
+
+public:
+  InputDevice(int _channelCount) {
+    channelCount = _channelCount;
+    channels = new int[channelCount];
+    for(int i = 0; i < channelCount; i++) {
+      channels[i] = 0;
+    }
+  }
+
+  virtual ~InputDevice() {
+    delete[] channels;
+  }
+
+  int getValue(int channel) {
+    return channels[channel-1]; //channel is 1-based
+  }
+
+  int getValueScaled(int channel, int min, int max) {
+    return map(channels[channel-1], 0, 255, min, max); //channel is 1-based
+  }
+  // function that executes whenever data is received from master
+  void receiveEvent(int howMany) {
+    while (Wire.available()) { // loop through all
+      uint8_t incoming = Wire.read();
+      
+      // Check if a new message should start
+      if (incoming > 127) {
+        bufferIndex = 0;
+        buffer[0] = 255;
+      }
+
+      // Save incoming byte into buffer
+      buffer[bufferIndex++] = incoming;
+
+      // Check if a complete message was received
+      if (bufferIndex >= 5) {
+        int channelNum = buffer[1] + buffer[2];
+        channelNum -= 1; //channels that come in are 1-based
+        int value = buffer[3] + buffer[4];
+        if (channelNum < channelCount) {
+          channels[channelNum] = value;
+        }
+        bufferIndex = 0;  // Reset the buffer index for the next message
+      }
+    }
+    Serial.print(channels[0]);
+    Serial.println();
+  }
+
+};
 
 CRGBArray<NUM_LEDS> leds;
 
@@ -45,517 +99,6 @@ CRGB gBackgroundColor = CRGB::Black;
 
 CRGBPalette16 gCurrentPalette;
 CRGBPalette16 gTargetPalette;
-
-class BeatCounter {
-  //counts midi beat-messages and calculates current number of beats
-  private:
-    int16_t beats; //number of fully passed beats
-    const int16_t COUNTSPERBEAT = 24; //number of timing messages within a quater beat
-    void (*onNewBeat)(int16_t); // Callback function to notify the caller about the end of a beat
-    int16_t lengths[5] = {8, 16, 32, 64, 128};
-    int currLength = 0;
-
-  public:
-    int16_t length; //length of the bar in beats
-    int16_t counts; //counted timing messages since last beat
-
-    BeatCounter& operator=(BeatCounter&& other) {
-      counts = other.counts;
-      beats = other.beats;
-      length = other.length;
-      onNewBeat = other.onNewBeat;
-      return *this;
-    }
-
-    BeatCounter(){
-      //empty default constructor
-    }
-
-    BeatCounter(int16_t barLength, void (*newBeatCallback)(int16_t)) {
-      //length in number of single beats
-      length = barLength;
-      onNewBeat = newBeatCallback;
-      Reset();
-    }
-
-    int16_t GetValue() {
-      //returns current value in 0..100
-      return ((beats * COUNTSPERBEAT + counts) * 100) / (length * COUNTSPERBEAT);
-    }
-
-    int16_t GetBeats(){
-      //returns the counter value as beats
-      return beats;
-    }
-
-    void Increment(){
-      counts++;
-      if(counts >= COUNTSPERBEAT){
-        //12 timing-counts = one beat, actually one quater-beat, but here referred to as a beat
-        counts = 0;
-        beats++;
-        if(beats >= length){
-          //length reached, reset counter
-          Reset();
-        } else{
-          onNewBeat(beats);
-        }       
-      }
-    }
-
-    void Reset(){
-      counts = 0;
-      beats = 0;
-      onNewBeat(0);
-    }
-
-    void changeLength(bool up){
-      if (up) {
-        currLength = (currLength + 1) % 5;
-      } else {
-        currLength = (currLength - 1 + 5) % 5;
-      }
-      length = lengths[currLength];
-      beats = ((beats) + length) % length;
-      Serial.print((String)length + "\n");
-    }
-
-};
-
-// Define enum for message types
-enum MidiMessageTypes {
-  Invalid = 0x00,                 // zero as invalid message
-  NoteOff = 0x80,                 // Data byte 1: note number, Data byte 2: velocity
-  NoteOn = 0x90,                  // Data byte 1: note number, Data byte 2: velocity
-  PolyphonicAftertouch = 0xA0,    // Data byte 1: note number, Data byte 2: pressure
-  ControlChange = 0xB0,           // Data byte 1: controller number, Data byte 2: controller value
-  ProgramChange = 0xC0,           // Data byte 1: program number
-  ChannelAftertouch = 0xD0,       // Data byte 1: pressure
-  PitchBend = 0xE0,               // Data byte 1: LSB, Data byte 2: MSB (14-bit value)
-  SystemExclusive = 0xF0,         // Data bytes: variable length (sysex message)
-  TimeCodeQuarterFrame = 0xF1,    // Data byte 1: time code value
-  SongPositionPointer = 0xF2,     // Data byte 1: LSB, Data byte 2: MSB (14-bit value)
-  SongSelect = 0xF3,              // Data byte 1: song number
-  TuneRequest = 0xF6,             // No data bytes
-  EndOfExclusive = 0xF7,          // No data bytes (end of sysex message)
-  TimingClock = 0xF8,             // No data bytes
-  Start = 0xFA,                   // No data bytes
-  Continue = 0xFB,                // No data bytes
-  Stop = 0xFC,                    // No data bytes
-  ActiveSensing = 0xFE,           // No data bytes
-  Reset = 0xFF                    // No data bytes
-};
-
-class MidiReader {
-  //This class reads midi input on Rx pin. It detects the first byte of each message by checking it's Most Significant Bit (MSB)
-  //it then reads 0-2 more bytes depending on the message type that's used as data.
-  //Example for a message with 2 data bytes:
-  //Byte1: 0x90 (Note on) - Byte2: 0x3C (Note pitch: C4) - Byte3: 0x45 (medium velocity)
-  //Example for a message with no data bytes:
-  //Byte1: 0xF1 (Timing message)
-  private:
-    // Callback function to notify the caller about received midi messages
-    void (*onNewMidi)(MidiMessageTypes, int, int, int);
-    void (*onConnect)(bool); //called on connect or disconnect with status as parameter
-    // Buffer for incoming midi messages
-    int midiBuffer[3];
-    uint8_t bufferIndex = 0;
-    int connectionTimeout = 500; //time after which connected gets set to false
-    int connectionCounter = 0;
-    int lastMlls = millis();
-    unsigned long lastTimingClockTime = 0;
-    int timingClockCounter = 0;
-
-  public:
-    bool running = false; //is false after midi stop message, and back true after start/continue
-    bool connected = false; //gets set to false after connectionTimeout
-    float bpm = 0.0f;
-
-    MidiReader(){}
-
-    MidiReader(void (*newMidiCallback)(MidiMessageTypes, int, int, int), void(*onConnectCallback)(bool)) {
-      onNewMidi = newMidiCallback;
-      onConnect = onConnectCallback;
-    }
-
-    // Method to be called in the main loop
-    void update() { 
-      int mlls = millis();
-      int deltat = mlls-lastMlls;
-      lastMlls = mlls;
-      connectionCounter += deltat;
-      if(connectionCounter >= connectionTimeout){
-        connected = false;
-        onConnect(false);
-      }
-      while (Serial.available() > 0) {
-        if(!connected){
-          onConnect(true);
-        }
-        connected = true; //midi recieved == connected
-        connectionCounter = 0;
-        uint8_t incomingByte = Serial.read();
-        // Serial.print(incomingByte, HEX);
-        // Serial.print("\n");
-        if(incomingByte & 0x80){
-          //is command byte, MSB == 1
-          midiBuffer[0] = incomingByte;
-          bufferIndex = 1;
-        } else {
-          // databyte, MSB == 0
-          if(bufferIndex > 0){
-            midiBuffer[bufferIndex] = incomingByte;
-            bufferIndex++;
-          } else {
-            //error, databyte recieved without command byte
-          }
-        }
-        int val = midiBuffer[0];
-        if(val & 0x80){
-          MidiMessageTypes type = 0;
-          uint8_t channel = 0;
-          //check if message complete
-          if(midiBuffer[0] >= 0xF0){
-            //is System Message 0xF0..0xFF
-            type = (MidiMessageTypes)midiBuffer[0];
-          } else{
-            //is channel message
-            type = (MidiMessageTypes)(midiBuffer[0] & 0xF0);
-            channel = midiBuffer[0] & 0x0F;
-          }
-          switch(type){
-            case Invalid:
-              //Invalid Message
-            break;
-
-            case NoteOn:
-            case NoteOff:
-            case PolyphonicAftertouch:
-            case ControlChange:
-            case PitchBend:
-            case SongPositionPointer:
-            case SystemExclusive:
-              //messages that require 2 data bytes
-              if(bufferIndex == 2){
-                //enough data for NoteOn Message available
-                onNewMidi(type, channel, midiBuffer[1], midiBuffer[2]);   
-                bufferIndex = 0;           
-              }
-            break;
-
-            case ProgramChange:
-            case ChannelAftertouch:
-            case SongSelect:
-            case TimeCodeQuarterFrame:
-              //messages that require 1 data byte
-              if(bufferIndex == 1){
-                //enough data for NoteOn Message available
-                onNewMidi(type, channel, midiBuffer[1], 0);  
-                bufferIndex = 0;            
-              }
-            break;
-
-            case Reset:
-            case ActiveSensing:
-            case Stop:
-            case Start:
-            case Continue:
-            case TimingClock:
-            case EndOfExclusive:
-            case TuneRequest:
-              //messages that require no data bytes
-              if(type == Start || type == Continue){
-                running = true;
-              } else if (type == Stop){
-                running = false;
-              } else if (type == TimingClock){
-                // Calculate BPM
-                timingClockCounter++;
-                if (timingClockCounter == 24) {
-                  unsigned long currentMillis = millis();
-                  unsigned long deltaTime = currentMillis - lastTimingClockTime;
-                  lastTimingClockTime = currentMillis;
-                  if (deltaTime > 0) {
-                    bpm = (60.0f * 1000) / deltaTime; // Multiply by 1000 to account for milliseconds
-                  }
-                  timingClockCounter = 0;
-                }
-              }
-              onNewMidi(type, 0, 0, 0);
-              bufferIndex = 0;
-            break;
-
-            default:
-              // //Unknown message recieved
-              // Serial.print("unknown Message: ");
-              // Serial.print(type, HEX);
-              // Serial.print("\n");
-            break;
-          }          
-        }
-      }
-    }
-};
-
-class Led{
-  private:
-    int pin;
-    int brightness = 2;
-    int brightCounter = 0;
-    int brightPeriod = 10;
-    int blinkRate = 0;
-    int blinkDuty = 0;
-    int blinkCount = 0;
-    int blinkCounter = 0;
-    int lastMlls;
-    bool state;
-    bool inverted = false; //Set to true, depending on how you connected the LED
-    bool timerPwm = false; //if a pwm-pin is used, use the pwm feature to get better resolution
-
-    int invertBrightness(int brightness){
-      return 255 - brightness;
-    }
-
-  public:
-    Led(){
-      
-    }
-
-    Led(int pin){
-      //
-      lastMlls = millis();
-      this->pin = pin;
-      pinMode(pin, OUTPUT);
-      brightCounter = brightPeriod;
-      switch(pin){
-        case 3:
-        case 5:
-        case 6:
-        case 9:
-        case 10:
-        case 11:
-          //is PWM-Pin - use timer-pwm
-          timerPwm = true;
-        break;
-        default:
-          //not pwm-pin, use software timed pwm
-          timerPwm = false;
-        break;
-      }
-      setPin(false);
-    }
-
-    void update(){
-      int mls = millis();
-      int deltat = mls - lastMlls;
-      lastMlls = mls;
-      bool dimmed = false;
-      //Dimming of the LED
-      if(brightCounter > 0){
-        brightCounter -= deltat;
-        if(brightCounter < invertBrightness(brightness)/26){
-          dimmed = false;
-        } else {
-          dimmed = true;
-        }
-        if(brightCounter <= 0){
-          brightCounter = brightPeriod;
-        }
-      }
-      //Blinking of the LED
-      if(blinkCounter > 0){
-        //blinking
-        blinkCounter -= deltat;
-        setPin(blinkCounter > (blinkRate - blinkDuty));
-        if(blinkCounter <= 0){
-          if(blinkCount != 0){
-            if(blinkCount > 0){
-              blinkCount--;
-            }
-            blinkCounter = blinkRate;
-          }          
-        }
-      } else{
-        //not blinking
-        if(blinkCount != 0){
-          if(blinkCount > 0){
-            blinkCount --;
-          }
-          blinkCounter = blinkRate;
-        }
-        setPin(state && (timerPwm || dimmed));
-      }
-    }
-
-    void setPin(bool state){
-      int onBright = timerPwm?brightness:255; //set brightness to 255 if not PWM-Pin, state will be toggled from update() to dim
-      int offBright = 0;
-      if(inverted){
-        onBright = invertBrightness(onBright);
-        offBright = 255;
-      }
-      analogWrite(pin, state?onBright:offBright);        
-    }
-
-    void setState(bool state){
-      this->state = state;
-    }
-
-    void blink(int rate, int duty, int count){
-      //sets to blink N times, count = -1 for infinite
-      //rate in ms period time, 1000 slow rate, 10 fast rate
-      //duty in 0..100 (%)
-      blinkRate = rate;
-      blinkDuty = (duty * rate)/100;
-      blinkCount = count - 1; //decrement, since first blink started
-      blinkCounter = rate;
-    }
-
-    void setBrightness(int brightness){
-      //brightness in 0..10
-      this->brightness = brightness;
-    }
-};
-
-class LedBar{
-  private:
-
-  public:
-    int length = 180;
-    int pin;
-    uint16_t position = 0; //position of the pointer
-    bool highlighted = false;
-    uint32_t markerColor = CRGB::Green;
-    uint32_t highlightColor = CRGB::Blue;
-    uint32_t pointerColor = CRGB::Red;
-    int16_t MARKERS[8] = {0, 22, 45, 67, 90, 112, 135, 157};
-
-    LedBar(){
-    }
-
-    void update(int beats, int beatsLength){
-      highlighted = ((beats%4)+4)%4 == 0;
-      position = (length * beats) / beatsLength;
-    }
-
-    bool isMarker(int pixel){
-      bool is = false;
-      for(int i=0; i<8; i++){
-        is = is || MARKERS[i] == pixel;
-      }
-      return is;
-    }
-};
-
-class Button{
-  public:
-    bool state = false; //current stable, debounced state, pressed down or not
-    bool lastState = false; //last stable, debounced state
-    bool pressed = false; //pressed down in this iteration?
-    bool released = false; //released in this iteration?
-    int pin = 0;
-    bool analogPin = false;
-    bool lastButtonState = false; //last state read from the pin, not debounced
-    int lastDebounceTime = 0;
-    int debounceDelay = 100;
-
-    int longPressDelay = 1000; // Time in milliseconds to consider a press as a long press
-    unsigned long pressStartTime = 0; // Time when the button was pressed
-    bool longPressed = false; // Long pressed in this iteration?
-    bool alreadyPressed = false; // flag to detect if longPressed already happened
-
-    Button(){
-      
-    }
-
-    Button(int pinNumber){
-      //Initialize button input
-      pin = pinNumber;
-      pinMode(pinNumber, INPUT);
-      switch(pinNumber){
-        case A0:
-        case A1:
-        case A2:
-        case A3:
-        case A4:
-        case A5:
-        case A6:
-        case A7:
-          analogPin = true;
-        break;
-      }
-    }
-
-    void update(){
-      //read current value
-      lastState = state;
-      bool reading = false;
-      if(analogPin){
-        reading = analogRead(pin) > 1000;
-      } else{
-        reading = digitalRead(pin);
-      }
-
-      //Debounce Button
-      if (reading != lastButtonState) {
-        lastDebounceTime = millis(); // Update the debounce timer
-      }
-
-      if ((millis() - lastDebounceTime) > debounceDelay) {
-        // If the button state hasn't changed for debounceDelay milliseconds, it's considered a stable state
-        if (reading != state) {
-          state = reading;
-        }
-      }
-      lastButtonState = reading;
-      //Detect valuechange
-      pressed = !lastState && state; //was pressed in this iteration
-      released = lastState && !state; //was released in this iteration
-
-      // Long press detection
-      if (state && !lastState) { // Button just pressed
-        pressStartTime = millis();
-        longPressed = false; // Reset longPressed flag when button is pressed
-        alreadyPressed = false;
-      } else if (state && lastState) { // Button still pressed
-        if (!alreadyPressed && !longPressed && millis() - pressStartTime >= longPressDelay) {
-          longPressed = true;
-          alreadyPressed = true;
-        } else if (longPressed) {
-          longPressed = false;
-        }
-      } else { // Button still released
-        longPressed = false;
-      }
-    }
-};
-
-class Poti{
-  private:
-    int lastValue = 0;
-  public:
-    int pin = A0;
-    int moveTolerance = 1; //turn up to reduce cpu load, keep on 1 to read poti as much as possible
-    bool moved = false; //indicates if poti was moved this iteration by more than moveTolerance
-    uint16_t value = 0;
-    bool inverted = false;
-
-    Poti(){}
-
-    Poti(int pin){
-      this->pin = pin;
-      pinMode(pin, INPUT);
-    }
-
-    void update(){
-      value = analogRead(pin);
-      if(inverted){
-        value = 1023 - value;
-      }
-      moved = abs(value-lastValue) > moveTolerance; //detect movement greater than moveTolerance
-    }
-
-};
 
 class Strobo{
   private:
@@ -657,6 +200,7 @@ class Worm {
       return hsvColor;
     }
 };
+
 class Flash {
   private:
     uint32_t bulkinessTimestamp;
@@ -777,16 +321,33 @@ class BeatFlasher{
     }
 };
 
-#define LED_COUNT 4
-Button leftBtn;
-Button middBtn;
-Button rghtBtn;
-Button middLongBtn;
-Poti leftPti;
-Poti rghtPti;
-Led boardLeds[LED_COUNT];
-MidiReader midi;
-BeatCounter counter;
+class TrackedVariable {
+  public:
+    TrackedVariable(){}
+    TrackedVariable(int initialValue): value(initialValue), changed(false) {}
+
+    int getValue() const {
+      return value;
+    }
+
+    void setValue(int newValue) {
+      if (newValue != value) {
+        changed = true;
+        value = newValue;
+      } else {
+        changed = false;
+      }
+    }
+
+    bool hasChanged() const {
+      return changed;
+    }
+
+  private:
+    int value;
+    bool changed;
+};
+
 int mode = 0; //currently playing animation mode
 int modeCount = 4; //number of modes
 Strobo strobo;
@@ -795,65 +356,18 @@ Flash flash;
 BeatFlasher beatFlash;
 uint32_t lastUpdate = millis();
 
-void onConnect(bool connected){
+TrackedVariable twinkDens(1);
+InputDevice* device = new InputDevice(10); // Start with a BluetoothDevice
 
-}
-
-void onMidi(MidiMessageTypes type, int channel, int byte1, int byte2){
-  switch(type){
-    case Start:
-    case Continue:
-      counter.Reset();
-    break;
-    case Stop:
-      counter.Reset();
-    break;
-    case TimingClock:
-      counter.Increment();
-      updateAnimations(); //update animations synced to midi
-    break;
-  }
-  // Serial.print((String)midi.bpm + "\n");
-  // Serial.print("Midi Message: 0x");
-  // Serial.print(type, HEX);
-  // Serial.print(" / 0x");
-  // Serial.print(channel, HEX);
-  // Serial.print(" / 0x");
-  // Serial.print(byte1, HEX);
-  // Serial.print(" / 0x");
-  // Serial.print(byte2, HEX);
-  // Serial.print("\n");
-}
-
-void onBeat(int16_t beats){
-  switch(mode){
-    case 0:
-      flash.triggerBulk();
-    break;
-    case 1:
-      if(midi.running){
-        beatFlash.setBeat(leds, beats);
-      } else {
-        beatFlash.setOn();
-      }
-    break;
-    case 2:
-    break;
-    case 3:
-    break;
-  }
-  boardLeds[1].blink(200, 100, 1);
-  boardLeds[2].blink(200, 100, 1);
-  if(beats == 0){
-    boardLeds[0].blink(200, 100, 1);
-    boardLeds[3].blink(200, 100, 1);
-  }
-}
+int dipSwitchPins[] = {13, 12, 11, 10, 9, 8, 7, 6, 5};
+int numPins = sizeof(dipSwitchPins) / sizeof(dipSwitchPins[0]);
 
 //SETUP
 void setup() {  
   delay( 3000 ); //safety startup delay
-  Serial.begin(31250);
+  Serial.begin(9600);
+  Wire.begin(9); // Start I2C Bus as Slave with address 9
+  Wire.onReceive(I2Creceive); // register event
   //init random seed with noise on analog pin
   randomSeed(analogRead(A3));
   //init strobo
@@ -864,121 +378,77 @@ void setup() {
   flash.bulkyness = 6;
   //init twinkles
   initTwinkles();
-  //Init Buttons and Potis
-  leftBtn = Button(btnPins[0]);
-  middBtn = Button(btnPins[1]);
-  rghtBtn = Button(btnPins[2]);
-  middLongBtn = Button(btnPins[1]);
-  leftPti = Poti(ptiPins[0]);
-  leftPti.inverted = true;
-  rghtPti = Poti(ptiPins[1]);
-  //Init LEDs
-  for(int i=0; i<LED_COUNT; i++){
-    boardLeds[i] = Led(ledPins[i]);
-    boardLeds[i].setState(false);
-    // boardLeds[i].blink(200, 30, 5);
-  }
-  midi = MidiReader(onMidi, onConnect);
-  counter = BeatCounter(4, onBeat);
 }
+
+void I2Creceive(int howMany){
+  device->receiveEvent(howMany);
+}
+
+int lastFlashManual = 0;
+int lastTwinkleColor = 0;
 
 //LOOP
 void loop()
 {
-  //Update buttons and potis
-  leftBtn.update();
-  middBtn.update();
-  middLongBtn.update();
-  rghtBtn.update();
-  leftPti.update();
-  rghtPti.update();
+  // //parameters
+  // //Twinkle Density 0..8
+  // //Twinkle Speed 0..8
+  // //Twinkle Color 0..10
+  // //flashes 0..255
+  // //flashes brightness 0..255
+  // //flash manual 0/255
+  // //solid amount
+  // //solid color
+  // //Strobe freq 0..255
+  // //Strobe dutycycle
 
-  //update LEDs
-  for(int i=0; i<LED_COUNT; i++){
-    boardLeds[i].update();
-  }
-  
-  //handle button presses
-  if(leftBtn.pressed){
-    TWINKLE_DENSITY = ((TWINKLE_DENSITY + 1 + 9) % 9);
-  }
-  if(middBtn.pressed){
-    flash.triggerBulk();
-  }
-  if(rghtBtn.pressed){
-    TWINKLE_SPEED = ((TWINKLE_SPEED + 1 + 9) % 9);
-  }
-  if(middLongBtn.longPressed){
-    //Middle button pressed long, change mode
-    mode = ((mode + 1 + modeCount) % modeCount);
-    for(int i=0; i<4; i++){
-      boardLeds[i].blink(400, 40, mode);
+  int mode = device->getValue(1);
+  if(mode != 0){
+    FastLED.showColor(CRGB(mode,mode,mode));
+
+  } else{
+    //Show normal animation mode
+    //TWINKLE DENSITY
+    TWINKLE_DENSITY = map(device->getValue(2), 0, 255, 0, 8);
+
+    //TWINKLE SPEED
+    TWINKLE_SPEED = map(device->getValue(3), 0, 255, 0, 8);
+
+    //TWINKLE COLOR PALETTE
+    int twinkleColor = device->getValue(4);
+    if(abs(twinkleColor - lastTwinkleColor) >= 10){
+      setColorPaletteByIndex(gTargetPalette, map(twinkleColor, 0, 255, 0, 10));  
     }
-  }
-
-  midi.update();
-  if(!midi.connected){
-    switch(mode){
-      case 0:
-        uint32_t interval = map(leftPti.value, 0, 1023, 3500, 100);
-        uint32_t currentTime = millis();
-        if (currentTime - lastUpdate >= interval) {
-          flash.triggerBulk();
-          lastUpdate = currentTime;
-        }
-      break;
-      case 1:
-        beatFlash.setOn();
-      break;
-      case 2:
-      break;
-      case 3:
-      break;
+    lastTwinkleColor = twinkleColor;
+    
+    //FLASH RATE
+    uint32_t flashInterval = map(device->getValue(5), 0, 255, 5000, 10);
+    uint32_t currentTime = millis();
+    if (currentTime - lastUpdate >= flashInterval && device->getValue(5) != 0) {
+      flash.triggerBulk();
+      lastUpdate = currentTime;
     }
 
-    //update animations on full speed if midi is disconnected
-    updateAnimations();
-  }
-  //display pixels to led strip
-  FastLED.show();
-}
-
-void updateAnimations(){
-    switch(mode){
-      case 0:
-        //set background brightness from poti
-        // gBackgroundColor = CRGB(CRGB::FairyLight).nscale8_video(rghtPti.value/16 + 1);
-        flash.brightness = constrain(leftPti.value/2, 0, 255);
-        updateTwinkles();
-        flash.update(leds);
-      break;
-      case 1:
-        pacifica_loop();
-        beatFlash.brightness = rghtPti.value/4;
-        beatFlash.setColor(leftPti.value);
-        beatFlash.update(leds);
-      break;
-      case 2:
-        strobo.rate = map(leftPti.value, 0, 1023, 10, 1000);
-        strobo.setColor(rghtPti.value);
-        strobo.update();
-      break;
-      case 3:
-        //WORM Animation
-        worm.setSpeed(map(leftPti.value, 0, 1023, -127, 128));
-        worm.setColor(rghtPti.value);
-        if(middBtn.pressed){
-          updateTwinkles(); //on button press, spawn some twinkles for the worm to eat, then choose new colors
-          chooseNextColorPalette(gTargetPalette);
-        }
-        worm.update(leds);
-      break;
+    //FLASH BRIGHTNESS
+    flash.brightness = device->getValue(6);
+    //MANUAL FLASH TRIGGER
+    int flashManual = device->getValue(7);
+    if(lastFlashManual <= 240 && flashManual > 240){
+      flash.triggerBulk();
     }
+    lastFlashManual = flashManual;
+
+    //update animations
+    updateTwinkles();
+    flash.update(leds);
+
+    //display pixels
+    FastLED.show();
+  }
 }
 
 void initTwinkles(){
-  FastLED.setMaxPowerInVoltsAndMilliamps( VOLTS, MAX_MA);
-  FastLED.addLeds<LED_TYPE,DATA_PIN,COLOR_ORDER>(leds, NUM_LEDS)
+  FastLED.addLeds<LED_TYPE,DATA_PIN,GRB>(leds, NUM_LEDS)
     .setCorrection(TypicalLEDStrip);
 
   chooseNextColorPalette(gTargetPalette);
@@ -987,9 +457,6 @@ void initTwinkles(){
 void updateTwinkles(){  
   EVERY_N_MILLISECONDS( 10 ) {
     nblendPaletteTowardPalette( gCurrentPalette, gTargetPalette, 12);
-  }
-  if(rghtPti.moved){
-    setColorPaletteByIndex(gTargetPalette, map(rghtPti.value, 0, 1023, 0, 10));
   }
   drawTwinkles( leds);
   // FastLED.show();
