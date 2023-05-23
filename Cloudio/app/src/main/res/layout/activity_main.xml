@@ -35,14 +35,6 @@
             android:paddingTop="16dp"
             android:text="Connect" />
 
-        <SeekBar
-            android:id="@+id/slider1"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_below="@+id/btnConnect"
-            android:layout_marginTop="24dp"
-            android:max="255" />
-
         <!-- Add more SeekBar widgets for the remaining sliders... -->
 
     </RelativeLayout>

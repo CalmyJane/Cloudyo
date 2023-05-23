@@ -4,6 +4,8 @@ import android.bluetooth.BluetoothDevice;
 import android.content.pm.PackageManager;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.View;
@@ -101,6 +103,34 @@ public class MainActivity extends AppCompatActivity implements DeviceListDialogF
 
         parentLayout.addView(button);
 
+        // Create Flash button
+        Button flbtn = new Button(this);
+        // Calculate 10% of screen height
+        DisplayMetrics displayMetrics = this.getResources().getDisplayMetrics();
+        int height = (int)(displayMetrics.heightPixels * 0.10);
+        flbtn.setLayoutParams((new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height)));
+        flbtn.setText("FLASH");
+        flbtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                seekBars[6].setProgress(250); //turn on manual flash, reset short time later
+
+                // Initialize the handler with the main (UI) thread's Looper
+                Handler handler = new Handler(Looper.getMainLooper());
+                // Delay in milliseconds
+                long delayMillis = 100;
+                // Perform an operation after the specified delay
+                handler.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        // Code to be executed after the delay
+                        // Insert your desired operation here
+                        seekBars[6].setProgress(10); //reset manual flash parameter
+                    }
+                }, delayMillis);
+            }
+        });
+        parentLayout.addView(flbtn);
 
         // Create HorizontalScrollView
         HorizontalScrollView horizontalScrollView = new HorizontalScrollView(this);
@@ -110,9 +140,6 @@ public class MainActivity extends AppCompatActivity implements DeviceListDialogF
 
         // Create a new LinearLayout for buttons
         LinearLayout buttonLayout = new LinearLayout(this);
-        // Calculate 10% of screen height
-        DisplayMetrics displayMetrics = this.getResources().getDisplayMetrics();
-        int height = (int)(displayMetrics.heightPixels * 0.10);
         buttonLayout.setLayoutParams(new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, height));
         buttonLayout.setOrientation(LinearLayout.HORIZONTAL);
@@ -139,7 +166,7 @@ public class MainActivity extends AppCompatActivity implements DeviceListDialogF
                 for (int j = 0; j < numSliders; j++) {
                     seekBars[j].setProgress(values[index][j]);
                 }            }
-        });
+            });
             buttonLayout.addView(btn);
         }
 

@@ -1,6 +1,33 @@
-/// @file    TwinkleFox.ino
-/// @brief   Twinkling "holiday" lights that fade in and out.
-/// @example TwinkleFox.ino
+// Author: Calmy Jane
+// Title: Cloudyo LED Driver
+// Description: Code for arduino that reads data from I2C (pin A4 and A5) and controls a Neopixel LED strip.
+// The code has different Animations and parameters for these animations. Each parameter is called a channel and can have a value of 0..255.
+// The channel values are updated through the I2C messages.
+
+
+//The messages are sent from another Arduino that can get the data from different sources:
+// DMX - A professional Light protocol, that features the same types of channels. Uses DMXtoI2C.ino from this repo.
+// Bluetooth - With SerialToI2C.ino a bluetooth-LE-module for arduino is read out and the data is passed on through I2C. The bluetooth module uses the same protocol as described below.
+// you can find an App in the Cloudio Folder that controls some of the parameters.
+// Potis - Another version for the future may be a board that just has a few potis, and maybe buttons to extend the available parameters. Not done yet.
+
+// Why the I2C?
+// The plan was always to feature different versions of control (DMX, Potis, Bluetooth ...), but I wanted to make it all on one board. Sadly the FastLED library used in this file
+// disables all Interrupts while sending data to the LED strips. Serial communication (I tried onboard hardware serial and all available software-serial libraries) seems to be heavily
+// affected by this. After a lot of time spent on this issue I decided to split it up to two boards. This also creates a nice interface for different controllers. This code simply 
+// expects raw bytes sent through I2C as described in the protocol description.
+
+// Protocol description
+// A pair of channel and value is sent as a packet. A packet consists of 5 bytes:
+// First  Byte: 255 (or anything >127, can be used to implement different commands from 127-255)
+// Second Byte: 0-127 of the channel
+// Third  Byte: 127-255 of the channel
+// Fourth Byte: 0-127 of the value
+// Fifth  Byte: 127-255 of the value
+// This is done because each byte loses 1 bit (the MSB) a high MSB means a new control-byte and the start of a new packet. Low MSB means databyte which can then only have 0-127 as value.
+// Example Packet: (255,  1, 0, 127, 13) -> Channel = 1,   Value = 140
+// Example Packet: (255, 127, 10, 50, 0) -> Channel = 137, Value = 50
+
 #include <Arduino.h>
 #include <Wire.h>
 #include "FastLED.h"
@@ -41,7 +68,8 @@ public:
   void receiveEvent(int howMany) {
     while (Wire.available()) { // loop through all
       uint8_t incoming = Wire.read();
-      
+      Serial.print(incoming);
+      Serial.println();
       // Check if a new message should start
       if (incoming > 127) {
         bufferIndex = 0;
@@ -62,8 +90,8 @@ public:
         bufferIndex = 0;  // Reset the buffer index for the next message
       }
     }
-    Serial.print(channels[0]);
-    Serial.println();
+    // Serial.print(channels[0]);
+    // Serial.println();
   }
 
 };
