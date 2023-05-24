@@ -390,8 +390,8 @@ void setup() {
   device->setValue(2, 50);
   device->setValue(3, 50);
   device->setValue(4, 255);
-  device->setValue(5, 0);
-  device->setValue(6, 0);
+  device->setValue(5, 20);
+  device->setValue(6, 100);
   device->setValue(7, 0);
 }
 
