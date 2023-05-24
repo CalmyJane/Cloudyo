@@ -3,7 +3,8 @@
 // Description: Code for arduino that reads data from I2C (pin A4 and A5) and controls a Neopixel LED strip.
 // The code has different Animations and parameters for these animations. Each parameter is called a channel and can have a value of 0..255.
 // The channel values are updated through the I2C messages.
-
+// Animations:
+// 
 
 //The messages are sent from another Arduino that can get the data from different sources:
 // DMX - A professional Light protocol, that features the same types of channels. Uses DMXtoI2C.ino from this repo.
@@ -64,6 +65,11 @@ public:
   int getValueScaled(int channel, int min, int max) {
     return map(channels[channel-1], 0, 255, min, max); //channel is 1-based
   }
+
+  void setValue(int channel, int value){
+    channels[channel-1] = value;
+  }
+
   // function that executes whenever data is received from master
   void receiveEvent(int howMany) {
     while (Wire.available()) { // loop through all
@@ -349,33 +355,6 @@ class BeatFlasher{
     }
 };
 
-class TrackedVariable {
-  public:
-    TrackedVariable(){}
-    TrackedVariable(int initialValue): value(initialValue), changed(false) {}
-
-    int getValue() const {
-      return value;
-    }
-
-    void setValue(int newValue) {
-      if (newValue != value) {
-        changed = true;
-        value = newValue;
-      } else {
-        changed = false;
-      }
-    }
-
-    bool hasChanged() const {
-      return changed;
-    }
-
-  private:
-    int value;
-    bool changed;
-};
-
 int mode = 0; //currently playing animation mode
 int modeCount = 4; //number of modes
 Strobo strobo;
@@ -384,7 +363,6 @@ Flash flash;
 BeatFlasher beatFlash;
 uint32_t lastUpdate = millis();
 
-TrackedVariable twinkDens(1);
 InputDevice* device = new InputDevice(10); // Start with a BluetoothDevice
 
 int dipSwitchPins[] = {13, 12, 11, 10, 9, 8, 7, 6, 5};
@@ -406,6 +384,15 @@ void setup() {
   flash.bulkyness = 6;
   //init twinkles
   initTwinkles();
+
+  //set start values to bluewhite twinkles
+  device->setValue(1, 0);
+  device->setValue(2, 50);
+  device->setValue(3, 50);
+  device->setValue(4, 255);
+  device->setValue(5, 0);
+  device->setValue(6, 0);
+  device->setValue(7, 0);
 }
 
 void I2Creceive(int howMany){
