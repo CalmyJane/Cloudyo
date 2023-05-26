@@ -34,7 +34,7 @@
 #include "FastLED.h"
 #define NUM_LEDS      300
 #define LED_TYPE   WS2811
-#define DATA_PIN        10
+#define DATA_PIN       10
 
 class InputDevice {
   //reads data through I2C. Since Serial communication is not possible while using FastLED, this is used to recieve data
@@ -74,8 +74,8 @@ public:
   void receiveEvent(int howMany) {
     while (Wire.available()) { // loop through all
       uint8_t incoming = Wire.read();
-      Serial.print(incoming);
-      Serial.println();
+      // Serial.print(incoming);
+      // Serial.println();
       // Check if a new message should start
       if (incoming > 127) {
         bufferIndex = 0;
@@ -393,6 +393,8 @@ void setup() {
   device->setValue(5, 20);
   device->setValue(6, 100);
   device->setValue(7, 0);
+
+  pinMode(13, OUTPUT); //blink LED on pin13 for debug and direct feedback without connecting led strip
 }
 
 void I2Creceive(int howMany){
@@ -460,6 +462,8 @@ void loop()
     //display pixels
     FastLED.show();
   }
+  //dim led on pin13 to indicate if data is arriving
+  analogWrite(13, device->getValue(1));
 }
 
 void initTwinkles(){
